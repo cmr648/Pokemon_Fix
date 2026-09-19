@@ -1,0 +1,129 @@
+name: Build Slot-6 Pokemon Automation (Windows)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out modified source
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC 2022
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.10.2'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtserialport qtmultimedia qtimageformats qtdeclarative'
+          cache: true
+          set-env: true
+
+      - name: Ensure Ninja is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+
+          ninja --version
+          cmake --version
+          cl
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S SerialPrograms -B build/Publish -G Ninja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DPACKAGE_BUILD=ON `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build/Publish --parallel 4
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          $deploy = Join-Path $env:GITHUB_WORKSPACE 'build\Publish\Output\Binaries64'
+          $exe = Join-Path $deploy 'SerialPrograms.exe'
+
+          if (!(Test-Path $exe)) {
+            throw "SerialPrograms.exe was not found at $exe"
+          }
+
+          $windeployqt = (Get-Command windeployqt.exe -ErrorAction Stop).Source
+
+          & $windeployqt `
+            --release `
+            --compiler-runtime `
+            --dir $deploy `
+            $exe
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Create Windows launcher
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:GITHUB_WORKSPACE 'build\Publish\Output'
+
+          $launcher = @'
+          @echo off
+          cd /d "%~dp0"
+
+          if not exist "Binaries64\SerialPrograms.exe" (
+              echo SerialPrograms.exe was not found.
+              pause
+              exit /b 1
+          )
+
+          start "" "Binaries64\SerialPrograms.exe"
+          '@
+
+          Set-Content `
+            -Path (Join-Path $output 'SerialPrograms-Windows.cmd') `
+            -Value $launcher `
+            -Encoding ASCII
+
+      - name: Verify packaged output
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:GITHUB_WORKSPACE 'build\Publish\Output'
+
+          $required = @(
+            'Binaries64\SerialPrograms.exe',
+            'Binaries64\Qt6Core.dll',
+            'Resources',
+            'Firmware',
+            'SerialPrograms-Windows.cmd'
+          )
+
+          foreach ($item in $required) {
+            $path = Join-Path $output $item
+
+            if (!(Test-Path $path)) {
+              throw "Required output is missing: $item"
+            }
+          }
+
+      - name: Upload custom Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PokemonAutomation-Slot6-Windows
+          path: build/Publish/Output/
+          if-no-files-found: error
+          retention-days: 14
