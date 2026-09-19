@@ -61,11 +61,19 @@ void go_to_summary(ConsoleHandle& console, ProControllerContext& context, int fr
     }
 }
 
-bool shiny_check_summary(ConsoleHandle& console, ProControllerContext& context, int from_last, StartMenuContext menu_context){
-    go_to_summary(console, context, from_last, menu_context);
+// Custom ACE starter setup:
+// Party slots 1-5 are occupied before receiving the starter.
+// The newly received starter is therefore placed into slot 6.
+bool shiny_check_starter_slot_six(
+    ConsoleHandle& console,
+    ProControllerContext& context
+){
+    open_slot_six(console, context);
     context.wait_for_all_requests();
+
     VideoSnapshot screen = console.video().snapshot();
     ShinySymbolDetector shiny_checker(COLOR_YELLOW);
+
     return shiny_checker.read(console.logger(), screen);
 }
 
@@ -526,7 +534,7 @@ bool check_for_shiny(
         hatch_daycare_egg(console, context);
         return shiny_check_summary(console, context);
     case PokemonFRLG_RngTarget::starters:
-        return shiny_check_summary(console, context, -2, StartMenuContext::NO_DEX);
+    return shiny_check_starter_slot_six(console, context);
     case PokemonFRLG_RngTarget::togepi:
     case PokemonFRLG_RngTarget::togepifast:
         hatch_togepi_egg(console, context);
