@@ -12,56 +12,47 @@ jobs:
 
     steps:
       - name: Check out modified source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Set up MSVC 2022
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
+      # This mirrors Pokemon Automation's own current CI workaround.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall'
           version: '6.10.2'
-          host: windows
-          target: desktop
-          arch: win64_msvc2022_64
-          modules: 'qtserialport qtmultimedia qtimageformats qtdeclarative'
+          modules: 'qtmultimedia qtserialport'
           cache: true
-          set-env: true
 
-      - name: Ensure Ninja is available
+      - name: Configure and build
         shell: pwsh
         run: |
-          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
-            choco install ninja -y --no-progress
+          Set-Location SerialPrograms
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Set-Location bin
+
+          cmake .. -DQT_MAJOR:STRING=6
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configure failed with exit code $LASTEXITCODE"
           }
 
-          ninja --version
-          cmake --version
-          cl
+          cmake --build . --config RelWithDebInfo --parallel 10
+          if ($LASTEXITCODE -ne 0) {
+            throw "Build failed with exit code $LASTEXITCODE"
+          }
 
-      - name: Configure
+      # Pokemon Automation intentionally skips Qt deployment while running
+      # under GitHub Actions. Run windeployqt ourselves so the downloaded
+      # artifact can run on a normal Windows PC without a local Qt install.
+      - name: Add Qt runtime files
         shell: pwsh
         run: |
-          cmake -S SerialPrograms -B build/Publish -G Ninja `
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-            -DPACKAGE_BUILD=ON `
-            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
-
-      - name: Build
-        shell: pwsh
-        run: |
-          cmake --build build/Publish --parallel 4
-
-      - name: Deploy Qt runtime
-        shell: pwsh
-        run: |
-          $deploy = Join-Path $env:GITHUB_WORKSPACE 'build\Publish\Output\Binaries64'
-          $exe = Join-Path $deploy 'SerialPrograms.exe'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'SerialPrograms\bin\RelWithDebInfo'
+          $exe = Join-Path $out 'SerialPrograms.exe'
 
           if (!(Test-Path $exe)) {
-            throw "SerialPrograms.exe was not found at $exe"
+            Write-Host "Contents of output directory:"
+            Get-ChildItem -Recurse $out -ErrorAction SilentlyContinue
+            throw "SerialPrograms.exe was not found at: $exe"
           }
 
           $windeployqt = (Get-Command windeployqt.exe -ErrorAction Stop).Source
@@ -69,61 +60,40 @@ jobs:
           & $windeployqt `
             --release `
             --compiler-runtime `
-            --dir $deploy `
+            --dir $out `
             $exe
 
           if ($LASTEXITCODE -ne 0) {
             throw "windeployqt failed with exit code $LASTEXITCODE"
           }
 
-      - name: Create Windows launcher
+      - name: Verify custom build
         shell: pwsh
         run: |
-          $output = Join-Path $env:GITHUB_WORKSPACE 'build\Publish\Output'
-
-          $launcher = @'
-          @echo off
-          cd /d "%~dp0"
-
-          if not exist "Binaries64\SerialPrograms.exe" (
-              echo SerialPrograms.exe was not found.
-              pause
-              exit /b 1
-          )
-
-          start "" "Binaries64\SerialPrograms.exe"
-          '@
-
-          Set-Content `
-            -Path (Join-Path $output 'SerialPrograms-Windows.cmd') `
-            -Value $launcher `
-            -Encoding ASCII
-
-      - name: Verify packaged output
-        shell: pwsh
-        run: |
-          $output = Join-Path $env:GITHUB_WORKSPACE 'build\Publish\Output'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'SerialPrograms\bin\RelWithDebInfo'
 
           $required = @(
-            'Binaries64\SerialPrograms.exe',
-            'Binaries64\Qt6Core.dll',
+            'SerialPrograms.exe',
+            'Qt6Core.dll',
+            'Qt6Widgets.dll',
             'Resources',
-            'Firmware',
-            'SerialPrograms-Windows.cmd'
+            'Firmware'
           )
 
           foreach ($item in $required) {
-            $path = Join-Path $output $item
-
+            $path = Join-Path $out $item
             if (!(Test-Path $path)) {
-              throw "Required output is missing: $item"
+              throw "Required build output is missing: $item"
             }
           }
 
+          Write-Host "Build looks good."
+          Get-ChildItem $out | Select-Object Name, Length
+
       - name: Upload custom Windows build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: PokemonAutomation-Slot6-Windows
-          path: build/Publish/Output/
+          path: SerialPrograms/bin/RelWithDebInfo/
           if-no-files-found: error
           retention-days: 14
