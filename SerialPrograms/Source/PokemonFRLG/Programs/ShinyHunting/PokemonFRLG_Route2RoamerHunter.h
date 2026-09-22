@@ -41,6 +41,11 @@ private:
         ProControllerContext& context,
         bool north
     ) const;
+    void step_through_door(ProControllerContext& context, bool north) const;
+    void return_to_gatehouse(
+        SingleSwitchProgramEnvironment& env,
+        ProControllerContext& context
+    ) const;
     void reuse_max_repel(SingleSwitchProgramEnvironment& env, ProControllerContext& context) const;
 
     MillisecondsOption LEG_DURATION;

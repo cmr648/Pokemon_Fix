@@ -7,6 +7,7 @@
 #include "CommonFramework/ProgramStats/StatsTracking.h"
 #include "CommonFramework/VideoPipeline/VideoFeed.h"
 #include "CommonTools/Async/InferenceRoutines.h"
+#include "CommonTools/VisualDetectors/BlackScreenDetector.h"
 #include "NintendoSwitch/Commands/NintendoSwitch_Commands_PushButtons.h"
 #include "NintendoSwitch/Commands/NintendoSwitch_Commands_Superscalar.h"
 #include "Pokemon/Pokemon_Strings.h"
@@ -110,6 +111,45 @@ Route2RoamerHunter::MoveResult Route2RoamerHunter::move_and_watch(
     return MoveResult::completed;
 }
 
+void Route2RoamerHunter::step_through_door(
+    ProControllerContext& context,
+    bool north
+) const{
+    // Send only a short, one-tile movement input.  Direction is released
+    // before the map transition begins, so loading time cannot change how far
+    // the player travels on either map.
+    if (north){
+        pbf_move_left_joystick(context, {0, +1}, 250ms, 1750ms);
+    }else{
+        pbf_move_left_joystick(context, {0, -1}, 250ms, 1750ms);
+    }
+    context.wait_for_all_requests();
+}
+
+void Route2RoamerHunter::return_to_gatehouse(
+    SingleSwitchProgramEnvironment& env,
+    ProControllerContext& context
+) const{
+    env.log("Re-anchoring at the Route 2 gatehouse after reusing Max Repel...");
+    BlackScreenWatcher doorway(COLOR_BLUE);
+
+    context.wait_for_all_requests();
+    run_until<ProControllerContext>(
+        env.console, context,
+        [](ProControllerContext& context){
+            ssf_press_left_joystick(context, {0, -1}, 0ms, 15000ms);
+            ssf_mash1_button(context, BUTTON_B, 14936ms);
+        },
+        {doorway}
+    );
+    context.wait_for_all_requests();
+
+    // The doorway watcher fires during the fade.  Wait until the gatehouse is
+    // fully loaded.  The player is now one step inside the north doorway.
+    pbf_wait(context, 1750ms);
+    context.wait_for_all_requests();
+}
+
 void Route2RoamerHunter::reuse_max_repel(
     SingleSwitchProgramEnvironment& env,
     ProControllerContext& context
@@ -131,9 +171,13 @@ void Route2RoamerHunter::program(SingleSwitchProgramEnvironment& env, ProControl
     env.log("Starting Route 2 roamer loop.");
     env.log("Any detected battle will stop the program without selecting a battle command.");
 
-    bool north = true;
     while (true){
-        MoveResult result = move_and_watch(env, context, north);
+        // Start one tile inside the north doorway.  Door movement is kept
+        // separate from the timed outdoor legs so every loop has identical
+        // Route 2 travel distance regardless of map-loading time.
+        step_through_door(context, true);
+
+        MoveResult result = move_and_watch(env, context, true);
 
         if (result == MoveResult::encounter){
             stats.encounters++;
@@ -155,17 +199,42 @@ void Route2RoamerHunter::program(SingleSwitchProgramEnvironment& env, ProControl
             reuse_max_repel(env, context);
             stats.repels++;
             env.update_stats();
-            // Restart the interrupted leg. Running against the route boundary
-            // safely re-aligns the player before the next direction change.
+            return_to_gatehouse(env, context);
             continue;
         }
 
-        if (!north){
-            stats.loops++;
+        result = move_and_watch(env, context, false);
+
+        if (result == MoveResult::encounter){
+            stats.encounters++;
             env.update_stats();
-            send_program_status_notification(env, NOTIFICATION_STATUS_UPDATE);
+            env.log("Encounter detected. Stopping all inputs and leaving the battle untouched.", COLOR_YELLOW);
+            send_program_notification(
+                env,
+                NOTIFICATION_ENCOUNTER,
+                COLOR_YELLOW,
+                "Encounter detected on Route 2. The battle has been left untouched.",
+                {}, "",
+                env.console.video().snapshot(),
+                true
+            );
+            break;
         }
-        north = !north;
+
+        if (result == MoveResult::repel_expired){
+            reuse_max_repel(env, context);
+            stats.repels++;
+            env.update_stats();
+            return_to_gatehouse(env, context);
+            continue;
+        }
+
+        // We are back on the outdoor doorway tile.  Take exactly one step
+        // inside, wait for the transition, and begin the next anchored loop.
+        step_through_door(context, false);
+        stats.loops++;
+        env.update_stats();
+        send_program_status_notification(env, NOTIFICATION_STATUS_UPDATE);
     }
 
     send_program_finished_notification(env, NOTIFICATION_PROGRAM_FINISH);
