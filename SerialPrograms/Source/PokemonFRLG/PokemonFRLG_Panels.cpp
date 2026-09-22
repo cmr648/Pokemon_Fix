@@ -6,6 +6,8 @@
 
 #include "CommonFramework/StaticGlobals.h"
 #include "CommonFramework/GlobalAutoPaths.h"
+#include "CommonFramework/Panels/OptionsPanel.h"
+#include "NintendoSwitch/NintendoSwitch_SingleSwitchProgram.h"
 #include "Pokemon/Pokemon_Strings.h"
 #include "PokemonFRLG_Panels.h"
 
