@@ -77,7 +77,11 @@ Route2RoamerHunter::MoveResult Route2RoamerHunter::move_and_watch(
     ProControllerContext& context,
     bool north
 ) const{
-    BattleDialogWatcher battle_dialog(COLOR_RED);
+    // The generic battle-dialog detector can falsely match the dark doorway
+    // transition when re-entering the Route 2 gatehouse.  The battle-menu
+    // detector requires the actual FIGHT/POKEMON/BAG/RUN screen, so normal
+    // map transitions do not stop the loop.
+    BattleMenuWatcher battle_menu(COLOR_RED);
     WhiteDialogWatcher white_dialog(COLOR_RED);
     Milliseconds duration = LEG_DURATION;
     Milliseconds run_duration = duration > 64ms ? duration - 64ms : duration;
@@ -93,7 +97,7 @@ Route2RoamerHunter::MoveResult Route2RoamerHunter::move_and_watch(
             }
             ssf_mash1_button(context, BUTTON_B, run_duration);
         },
-        {battle_dialog, white_dialog}
+        {battle_menu, white_dialog}
     );
     context.wait_for_all_requests();
 
