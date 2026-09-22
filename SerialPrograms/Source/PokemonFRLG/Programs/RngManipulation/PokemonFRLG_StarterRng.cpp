@@ -203,6 +203,21 @@ StarterRng::StarterRng()
 
 
 bool StarterRng::walk_to_rival_battle(SingleSwitchProgramEnvironment& env, ProControllerContext& context){
+    // The custom ACE setup receives the starter into party slot 6 and leaves
+    // this routine on the starter's summary screen. Move that starter into
+    // slot 1 before starting the rival battle so the battle automation uses it.
+    env.log("Moving the starter from party slot 6 to slot 1...");
+    pbf_press_button(context, BUTTON_B, 320ms, 640ms);   // summary -> party
+    pbf_press_button(context, BUTTON_A, 320ms, 320ms);   // slot 6 submenu
+    for (int i = 0; i < 3; i++){
+        pbf_press_dpad(context, DPAD_UP, 320ms, 320ms);  // select SWITCH
+    }
+    pbf_press_button(context, BUTTON_A, 320ms, 640ms);   // begin switching
+    pbf_press_dpad(context, DPAD_DOWN, 320ms, 320ms);    // slot 6 -> CANCEL
+    pbf_press_dpad(context, DPAD_DOWN, 320ms, 320ms);    // CANCEL -> slot 1
+    pbf_press_button(context, BUTTON_A, 320ms, 1000ms);  // swap slots 6 and 1
+    context.wait_for_all_requests();
+
     // return to the overworld
     pbf_mash_button(context, BUTTON_B, 5000ms);
     int num_steps_to_the_left;
