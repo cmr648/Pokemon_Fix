@@ -78,6 +78,25 @@ Route2RoamerHunter::MoveResult Route2RoamerHunter::move_and_watch(
     ProControllerContext& context,
     bool north
 ) const{
+    // Check before sending any input. Repel can expire on the single doorway
+    // step, and an immediate B press would otherwise dismiss the message
+    // before the detector's hold time completes.
+    {
+        BattleMenuWatcher battle_menu(COLOR_RED);
+        WhiteDialogWatcher white_dialog(COLOR_RED);
+        context.wait_for_all_requests();
+        int ret = wait_until(
+            env.console, context, 600ms,
+            {battle_menu, white_dialog}
+        );
+        if (ret == 0){
+            return MoveResult::encounter;
+        }
+        if (ret == 1){
+            return MoveResult::repel_expired;
+        }
+    }
+
     // The generic battle-dialog detector can falsely match the dark doorway
     // transition when re-entering the Route 2 gatehouse.  The battle-menu
     // detector requires the actual FIGHT/POKEMON/BAG/RUN screen, so normal
@@ -96,7 +115,9 @@ Route2RoamerHunter::MoveResult Route2RoamerHunter::move_and_watch(
             }else{
                 ssf_press_left_joystick(context, {0, -1}, 0ms, duration);
             }
-            ssf_mash1_button(context, BUTTON_B, run_duration);
+            // Hold B to run. Do not mash it: repeated B presses can dismiss
+            // the Repel-expired message before vision confirms it.
+            ssf_press_button(context, BUTTON_B, 0ms, run_duration);
         },
         {battle_menu, white_dialog}
     );
@@ -138,7 +159,7 @@ void Route2RoamerHunter::return_to_gatehouse(
         env.console, context,
         [](ProControllerContext& context){
             ssf_press_left_joystick(context, {0, -1}, 0ms, 15000ms);
-            ssf_mash1_button(context, BUTTON_B, 14936ms);
+            ssf_press_button(context, BUTTON_B, 0ms, 14936ms);
         },
         {doorway}
     );
