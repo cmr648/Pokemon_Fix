@@ -525,13 +525,15 @@ bool check_for_shiny(
     case PokemonFRLG_RngTarget::eggpickup:
         hatch_daycare_egg(console, context);
         return shiny_check_summary(console, context);
-    case PokemonFRLG_RngTarget::starters:
-    {
-        // Custom ACE setup: party slots 1-5 are occupied and the
-        // newly received starter is placed into party slot 6.
+    case PokemonFRLG_RngTarget::starters:{
+        // Do not navigate to the starter with a relative cursor offset. FRLG can
+        // remember the previously selected party member, so a fixed sequence of
+        // inputs can occasionally open slot 5 instead of slot 6.
+        //
+        // open_slot_six() watches the party cursor and keeps moving until the
+        // actual sixth slot is detected before opening its summary.
         open_slot_six(console, context);
         context.wait_for_all_requests();
-
         VideoSnapshot screen = console.video().snapshot();
         ShinySymbolDetector shiny_checker(COLOR_YELLOW);
         return shiny_checker.read(console.logger(), screen);
