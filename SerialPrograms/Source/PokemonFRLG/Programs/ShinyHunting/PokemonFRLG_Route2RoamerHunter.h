@@ -8,6 +8,7 @@
 
 #include "CommonFramework/Notifications/EventNotificationsTable.h"
 #include "Common/Cpp/Options/SimpleIntegerOption.h"
+#include "CommonTools/Options/LanguageOCROption.h"
 #include "NintendoSwitch/NintendoSwitch_SingleSwitchProgram.h"
 
 namespace PokemonAutomation{
@@ -47,7 +48,12 @@ private:
         ProControllerContext& context
     ) const;
     void reuse_max_repel(SingleSwitchProgramEnvironment& env, ProControllerContext& context) const;
+    bool handle_encounter(
+        SingleSwitchProgramEnvironment& env,
+        ProControllerContext& context
+    );
 
+    OCR::LanguageOCROption LANGUAGE;
     MillisecondsOption LEG_DURATION;
     EventNotificationOption NOTIFICATION_ENCOUNTER;
     EventNotificationOption NOTIFICATION_STATUS_UPDATE;

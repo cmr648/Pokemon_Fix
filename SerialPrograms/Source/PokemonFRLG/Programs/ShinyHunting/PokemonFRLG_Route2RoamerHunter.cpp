@@ -6,13 +6,16 @@
 #include "CommonFramework/Notifications/ProgramNotifications.h"
 #include "CommonFramework/ProgramStats/StatsTracking.h"
 #include "CommonFramework/VideoPipeline/VideoFeed.h"
+#include "CommonFramework/VideoPipeline/VideoOverlayScopes.h"
 #include "CommonTools/Async/InferenceRoutines.h"
 #include "CommonTools/VisualDetectors/BlackScreenDetector.h"
 #include "NintendoSwitch/Commands/NintendoSwitch_Commands_PushButtons.h"
 #include "NintendoSwitch/Commands/NintendoSwitch_Commands_Superscalar.h"
 #include "Pokemon/Pokemon_Strings.h"
+#include "Pokemon/Inference/Pokemon_NameReader.h"
 #include "PokemonFRLG/Inference/Dialogs/PokemonFRLG_BattleDialogs.h"
 #include "PokemonFRLG/Inference/Dialogs/PokemonFRLG_DialogDetector.h"
+#include "PokemonFRLG/Inference/PokemonFRLG_WildEncounterReader.h"
 #include "PokemonFRLG/PokemonFRLG_Navigation.h"
 #include "PokemonFRLG_Route2RoamerHunter.h"
 
@@ -37,14 +40,17 @@ struct Route2RoamerHunter_Descriptor::Stats : public StatsTracker{
         : loops(m_stats["Route 2 Loops"])
         , repels(m_stats["Max Repels Used"])
         , encounters(m_stats["Encounters"])
+        , other_encounters(m_stats["Other Pokemon"])
     {
         m_display_order.emplace_back("Route 2 Loops");
         m_display_order.emplace_back("Max Repels Used");
         m_display_order.emplace_back("Encounters");
+        m_display_order.emplace_back("Other Pokemon", HIDDEN_IF_ZERO);
     }
     std::atomic<uint64_t>& loops;
     std::atomic<uint64_t>& repels;
     std::atomic<uint64_t>& encounters;
+    std::atomic<uint64_t>& other_encounters;
 };
 
 std::unique_ptr<StatsTracker> Route2RoamerHunter_Descriptor::make_stats() const{
@@ -52,7 +58,12 @@ std::unique_ptr<StatsTracker> Route2RoamerHunter_Descriptor::make_stats() const{
 }
 
 Route2RoamerHunter::Route2RoamerHunter()
-    : LEG_DURATION(
+    : LANGUAGE(
+        "<b>Game Language:</b>",
+        Pokemon::PokemonNameReader::instance().languages(),
+        LockMode::LOCK_WHILE_RUNNING, true
+    )
+    , LEG_DURATION(
         "<b>Movement per Direction:</b><br>Run north or south for this long. The default is tuned for the Route 2 gatehouse loop shown in the reference video.",
         LockMode::LOCK_WHILE_RUNNING,
         "4500 ms"
@@ -69,6 +80,7 @@ Route2RoamerHunter::Route2RoamerHunter()
         &NOTIFICATION_PROGRAM_FINISH,
     })
 {
+    PA_ADD_OPTION(LANGUAGE);
     PA_ADD_OPTION(LEG_DURATION);
     PA_ADD_OPTION(NOTIFICATIONS);
 }
@@ -186,11 +198,77 @@ void Route2RoamerHunter::reuse_max_repel(
     context.wait_for_all_requests();
 }
 
+bool Route2RoamerHunter::handle_encounter(
+    SingleSwitchProgramEnvironment& env,
+    ProControllerContext& context
+){
+    Route2RoamerHunter_Descriptor::Stats& stats = env.current_stats<Route2RoamerHunter_Descriptor::Stats>();
+    stats.encounters++;
+    env.update_stats();
+
+    WildEncounterReader reader(COLOR_RED);
+    VideoOverlaySet overlays(env.console.overlay());
+    reader.make_overlays(overlays);
+
+    std::string species;
+    for (size_t attempt = 0; attempt < 3 && species.empty(); attempt++){
+        pbf_wait(context, 500ms);
+        context.wait_for_all_requests();
+        VideoSnapshot screen = env.console.video().snapshot();
+        PokemonFRLG_WildEncounter encounter = reader.read_encounter(
+            env.logger(), LANGUAGE, screen, {}
+        );
+        species = encounter.name;
+    }
+
+    env.log("Encounter species: " + (species.empty() ? std::string("unrecognized") : species));
+
+    if (species == "entei" || species == "raikou" || species == "suicune"){
+        env.log("Roaming legendary detected. Leaving the battle untouched.", COLOR_YELLOW);
+        send_program_notification(
+            env,
+            NOTIFICATION_ENCOUNTER,
+            COLOR_YELLOW,
+            "Roaming legendary detected: " + species + ". The battle has been left untouched.",
+            {}, "",
+            env.console.video().snapshot(),
+            true
+        );
+        return true;
+    }
+
+    // An unreadable name could be a roamer. Stop safely instead of risking
+    // an irreversible flee from the target.
+    if (species.empty()){
+        env.log("Unable to identify the encounter. Stopping safely without sending battle inputs.", COLOR_RED);
+        send_program_notification(
+            env,
+            NOTIFICATION_ENCOUNTER,
+            COLOR_RED,
+            "Encounter identification failed. The battle has been left untouched for safety.",
+            {}, "",
+            env.console.video().snapshot(),
+            true
+        );
+        return true;
+    }
+
+    stats.other_encounters++;
+    env.update_stats();
+    env.log("Non-roamer encountered (" + species + "). Running away and restoring Max Repel...");
+    flee_battle(env.console, context);
+    reuse_max_repel(env, context);
+    stats.repels++;
+    env.update_stats();
+    return_to_gatehouse(env, context);
+    return false;
+}
+
 void Route2RoamerHunter::program(SingleSwitchProgramEnvironment& env, ProControllerContext& context){
     Route2RoamerHunter_Descriptor::Stats& stats = env.current_stats<Route2RoamerHunter_Descriptor::Stats>();
 
     env.log("Starting Route 2 roamer loop.");
-    env.log("Any detected battle will stop the program without selecting a battle command.");
+    env.log("Roamers will be left untouched. Other Pokemon will be fled from automatically.");
 
     while (true){
         // Start one tile inside the north doorway.  Door movement is kept
@@ -201,19 +279,10 @@ void Route2RoamerHunter::program(SingleSwitchProgramEnvironment& env, ProControl
         MoveResult result = move_and_watch(env, context, true);
 
         if (result == MoveResult::encounter){
-            stats.encounters++;
-            env.update_stats();
-            env.log("Encounter detected. Stopping all inputs and leaving the battle untouched.", COLOR_YELLOW);
-            send_program_notification(
-                env,
-                NOTIFICATION_ENCOUNTER,
-                COLOR_YELLOW,
-                "Encounter detected on Route 2. The battle has been left untouched.",
-                {}, "",
-                env.console.video().snapshot(),
-                true
-            );
-            break;
+            if (handle_encounter(env, context)){
+                break;
+            }
+            continue;
         }
 
         if (result == MoveResult::repel_expired){
@@ -227,19 +296,10 @@ void Route2RoamerHunter::program(SingleSwitchProgramEnvironment& env, ProControl
         result = move_and_watch(env, context, false);
 
         if (result == MoveResult::encounter){
-            stats.encounters++;
-            env.update_stats();
-            env.log("Encounter detected. Stopping all inputs and leaving the battle untouched.", COLOR_YELLOW);
-            send_program_notification(
-                env,
-                NOTIFICATION_ENCOUNTER,
-                COLOR_YELLOW,
-                "Encounter detected on Route 2. The battle has been left untouched.",
-                {}, "",
-                env.console.video().snapshot(),
-                true
-            );
-            break;
+            if (handle_encounter(env, context)){
+                break;
+            }
+            continue;
         }
 
         if (result == MoveResult::repel_expired){
